@@ -8,7 +8,12 @@
 // struct may be constructed multiple times during hot-reload scenarios, and we
 // want a single subscriber for the entire process lifetime.
 
-fn main() {
+mod app;
+mod message;
+mod state;
+
+fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
     tracing::info!("VaultMaid starting");
+    app::run()
 }

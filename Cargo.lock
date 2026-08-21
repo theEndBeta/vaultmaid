@@ -5375,6 +5375,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "bitwarden",
+ "dark-light",
  "dirs 5.0.1",
  "iced",
  "keyring",
