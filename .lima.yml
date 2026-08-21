@@ -1,0 +1,114 @@
+# https://github.com/lima-vm/lima/blob/master/templates/default.yaml
+minimumLimaVersion: 2.1.0
+
+base:
+  - template:_images/fedora-44
+
+upgradePackages: true
+
+user:
+  name: lima
+  # shell: /usr/bin/fish
+
+mounts:
+  - location: "~/.config/nvim"
+    mountPoint: "{{.Home}}/.config/nvim"
+    writable: false
+  - location: "~/.local/share/nvim"
+    mountPoint: "{{.Home}}/.local/share/nvim"
+    writable: true
+  - location: "~/.kilocode"
+    mountPoint: "{{.Home}}/.kilocode"
+    writable: true
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      dnf install -y \
+        neovim \
+        fish \
+        git
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      export RUSTUP_INIT_SKIP_PATH_CHECK=yes   # skip the “add to PATH?” prompt
+      curl -fsSL https://sh.rustup.rs | sh -s -- -y
+
+      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      # Verify the installation
+      /home/linuxbrew/.linuxbrew/bin/brew doctor || true
+
+      export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+
+      brew trust "PeonPing/tap/peon-ping"
+      brew bundle --global
+      mise install
+      uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+
+  # # `data` is a file that is written to the guest filesystem and not executed at all.
+  # The file is written after the boot scripts, but before any other provisioning scripts are run.
+  # Note that reverse-sshfs mounts are not established at this time; other mount types are already mounted.
+  # The `path` and `content` properties are required. The `file` property can be used the same way as with
+  # other provisioning scripts, in which case `content` must be empty. The `owner` defaults to "root:root";
+  # the permissions default to 644. The `overwrite` property defaults to `true`, in which case the file will
+  # be overwritten on every boot.
+  - mode: data
+    path: /home/lima.linux/.config/mise/config.toml
+    permissions: 0644
+    owner: "lima:lima"
+    overwrite: false
+    content: |
+      [tools]
+      node = "lts"
+      "npm:@kilocode/cli" = "latest"
+
+  - mode: data
+    path: /home/lima.linux/.config/fish/conf.d/kilo.fish
+    permissions: 0644
+    owner: "lima:lima"
+    overwrite: false
+    content: |
+      /home/linuxbrew/.linuxbrew/bin/brew shellenv | source
+      mise activate fish | source
+      source "$HOME/.cargo/env.fish"
+
+  - mode: data
+    path: /home/lima.linux/.Brewfile
+    permissions: 0644
+    owner: "lima:lima"
+    overwrite: true
+    content: |
+      brew "PeonPing/tap/peon-ping"
+      brew "ast-grep"
+      brew "comby"
+      brew "difftastic"
+      brew "git-delta"
+      brew "hyperfine"
+      brew "jj"
+      brew "just"
+      brew "mise"
+      brew "scc"
+      brew "sd"
+      brew "shellcheck"
+      brew "uv"
+      brew "watchexec"
+      brew "yq"
+      brew "zip"
+
+  - mode: data
+    path: /etc/profile.d/kilo.sh
+    permissions: 0644
+    owner: "lima:lima"
+    overwrite: false
+    content: |
+      eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+      export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+      eval "$(mise activate bash)"
+
+# vim: set ft=yaml:
