@@ -10,6 +10,7 @@
 // environment, not of application state — storing it would risk divergence
 // when the OS switches themes while the app is running.
 
+use crate::config::Config;
 use crate::message::{Message, Screen};
 use crate::state::State;
 use iced::widget::{column, text};
@@ -17,22 +18,37 @@ use iced::{Element, Theme};
 
 /// Launches the application event loop.
 ///
-/// This is the single entry point called from `main.rs`; it returns Iced's
-/// `Result` so the process exit code reflects startup failures.
+/// Config is loaded in `run_with` rather than `State::default` so unit
+/// tests can still construct a default state without touching the XDG
+/// config directory.
 pub fn run() -> iced::Result {
     iced::application("VaultMaid", update, view)
         .theme(theme)
-        .run()
+        .run_with(|| {
+            (
+                State {
+                    config: Config::load_or_default(),
+                    ..State::default()
+                },
+                iced::Task::none(),
+            )
+        })
 }
 
 /// Applies a message to the state.
 ///
-/// This is a pure function over `State` — no side effects here. Commands that
-/// need to reach the network or filesystem are returned from `update` in later
-/// steps; for the skeleton every message is inert.
-fn update(_state: &mut State, message: Message) {
+/// `ServerUrlChanged` writes through to disk here instead of returning a
+/// Task: the file is a few hundred bytes and a failed write must not
+/// roll back the in-memory URL the user just typed.
+fn update(state: &mut State, message: Message) {
     match message {
         Message::Noop => {}
+        Message::ServerUrlChanged(url) => {
+            state.config.server_url = url;
+            if let Err(error) = state.config.save() {
+                tracing::error!(%error, "failed to persist server URL");
+            }
+        }
     }
 }
 

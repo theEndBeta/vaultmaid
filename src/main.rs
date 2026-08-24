@@ -9,6 +9,7 @@
 // want a single subscriber for the entire process lifetime.
 
 mod app;
+mod config;
 mod message;
 mod state;
 

@@ -10,16 +10,21 @@
 // Sub-states (login form, PIN entry, vault data) are added as optional fields
 // here as later steps introduce them; this file only establishes the skeleton.
 
+use crate::config::Config;
 use crate::message::Screen;
 
 /// The entire runtime state of the application.
 ///
 /// `screen` is the top-level discriminator: every view pattern-matches on it
-/// first, then reads only the fields relevant to that screen. `toasts` is a
-/// placeholder that later steps replace with a structured toast stack.
+/// first, then reads only the fields relevant to that screen. `config` is
+/// loaded once at startup and mutated in place so views never talk to the
+/// filesystem. `toasts` is a placeholder that later steps replace with a
+/// structured toast stack.
 #[derive(Debug, Default)]
 pub struct State {
     pub screen: Screen,
+    pub config: Config,
+    #[allow(dead_code)] // toast stack is a Step 16 concern; field exists so State stays flat
     pub toasts: Vec<String>,
 }
 
@@ -32,5 +37,6 @@ mod tests {
         let state = State::default();
         assert_eq!(state.screen, Screen::Login);
         assert!(state.toasts.is_empty());
+        assert_eq!(state.config, crate::config::Config::default());
     }
 }

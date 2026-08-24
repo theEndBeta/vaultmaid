@@ -10,6 +10,7 @@
 // the view layer to pattern-match on Screen without knowing about every Message.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)] // later steps construct every variant as the state machine grows
 pub enum Screen {
     #[default]
     Login,
@@ -21,6 +22,10 @@ pub enum Screen {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // constructed by widgets that do not exist until the login view
 pub enum Message {
     Noop,
+    /// The login field changed. Persisted immediately so a crash after
+    /// typing a self-hosted URL does not fall back to Bitwarden Cloud.
+    ServerUrlChanged(String),
 }
