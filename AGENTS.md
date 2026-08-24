@@ -179,6 +179,15 @@ Repo-local git identity configured: `vaultmaid@local` / `VaultMaid`. Use this fo
 ## Implementation Plan
 
 Full implementation plan with 19 steps across 7 phases is at:
-`/home/lima.guest/.local/share/kilo/plans/1787254773478-vaultmaid-implementation-plan.md`
+`plans/1787254773478-vaultmaid-implementation-plan.md` (relative to repo root)
 
 **Read this file before starting any step.** It is the single source of truth.
+
+## Planning Files
+
+All planning documents live in `plans/` within the repository and are version-controlled alongside the implementation. This ensures:
+- Plans evolve with the code and are discoverable by any agent
+- Historical context is preserved in git history
+- No external dependencies on ephemeral session paths
+
+When creating new plans, use the naming convention `<timestamp>-<topic>.md` and place them in `plans/`.
