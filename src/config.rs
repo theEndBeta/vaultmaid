@@ -19,6 +19,12 @@
 //! remember. Callers that need a custom path (tests) go through
 //! `load_from` / `save_to` so production code can keep using the XDG
 //! location without tests mutating a real home directory.
+//!
+//! Two failure classes are treated differently. TOML that will not parse
+//! is presumed damaged and is backed up before being replaced. Values
+//! that parse but would break the app (an unparseable server URL, a
+//! zero-size window) are repaired in place: a hand-edit typo is not file
+//! damage, and the fields the user got right should survive the load.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -91,6 +97,12 @@ impl Config {
     }
 
     /// Persist to the XDG config path, creating the directory if needed.
+    ///
+    /// App logic uses this; `save_to` exists only for callers that must
+    /// target a specific file (tests, the self-healing writes inside
+    /// `load_from`). A single `save(Option<&Path>)` was rejected because
+    /// `save(None)` at a call site hides which location is being written,
+    /// while two explicit names keep the default target visible.
     pub fn save(&self) -> Result<(), ConfigError> {
         self.save_to(&Self::path())
     }
@@ -109,8 +121,18 @@ impl Config {
         }
 
         match fs::read_to_string(path) {
-            Ok(raw) => match toml::from_str(&raw) {
-                Ok(config) => config,
+            Ok(raw) => match toml::from_str::<Config>(&raw) {
+                Ok(config) => {
+                    let repaired = config.sanitized();
+                    if repaired != config {
+                        // Valid TOML that the app cannot use: rewrite so the
+                        // file heals itself and the corrected fields persist.
+                        if let Err(save_error) = repaired.save_to(path) {
+                            tracing::warn!(%save_error, "could not rewrite repaired config");
+                        }
+                    }
+                    repaired
+                }
                 Err(error) => {
                     tracing::warn!(
                         %error,
@@ -159,6 +181,39 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(APP_DIR)
             .join(FILE_NAME)
+    }
+
+    /// Copy with any unusable field values replaced by their defaults.
+    ///
+    /// A server URL that does not parse as http(s) or a zero-size window
+    /// would fail confusingly later (login screen to a bogus host, a
+    /// window the compositor refuses to map). Repairing only the offending
+    /// fields preserves everything else a user may have set.
+    fn sanitized(&self) -> Config {
+        let mut repaired = self.clone();
+        if !is_valid_server_url(&repaired.server_url) {
+            tracing::warn!(
+                url = %repaired.server_url,
+                "config server_url is not an http(s) URL; using default"
+            );
+            repaired.server_url = DEFAULT_SERVER_URL.to_owned();
+        }
+        if repaired.window.width == 0 || repaired.window.height == 0 {
+            tracing::warn!(?repaired.window, "config window must be non-zero; using default");
+            repaired.window = WindowState::default();
+        }
+        repaired
+    }
+}
+
+/// True when the string is a URL the HTTP client can actually dial.
+///
+/// Scheme is restricted to http/https deliberately: a user who types
+/// `ftp://…` or a bare hostname almost certainly meant a web vault.
+fn is_valid_server_url(raw: &str) -> bool {
+    match url::Url::parse(raw) {
+        Ok(parsed) => matches!(parsed.scheme(), "http" | "https"),
+        Err(_) => false,
     }
 }
 
@@ -293,5 +348,65 @@ mod tests {
             toml::from_str(&fs::read_to_string(&path).unwrap()).expect("replacement toml");
         assert_eq!(replacement, Config::default());
         cleanup(&path);
+    }
+
+    #[test]
+    fn unparseable_server_url_is_repaired_in_place() {
+        let path = isolated_path("bad-url");
+        let original = Config {
+            server_url: "not-a-url".to_owned(),
+            window: WindowState {
+                width: 1000,
+                height: 700,
+            },
+            expanded_nodes: vec!["Work".into()],
+            pin_verifier: None,
+        };
+        original.save_to(&path).expect("save bad config");
+
+        let loaded = Config::load_from(&path);
+        assert_eq!(loaded.server_url, DEFAULT_SERVER_URL);
+        assert_eq!(
+            loaded.window,
+            WindowState {
+                width: 1000,
+                height: 700
+            }
+        );
+        assert_eq!(loaded.expanded_nodes, vec!["Work".to_owned()]);
+
+        let on_disk: Config =
+            toml::from_str(&fs::read_to_string(&path).unwrap()).expect("healed toml");
+        assert_eq!(on_disk.server_url, DEFAULT_SERVER_URL);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn zero_sized_window_is_repaired_in_place() {
+        let path = isolated_path("bad-window");
+        let original = Config {
+            server_url: "https://vault.example.test".to_owned(),
+            window: WindowState {
+                width: 0,
+                height: 0,
+            },
+            expanded_nodes: vec![],
+            pin_verifier: None,
+        };
+        original.save_to(&path).expect("save bad config");
+
+        let loaded = Config::load_from(&path);
+        assert_eq!(loaded.window, WindowState::default());
+        assert_eq!(loaded.server_url, "https://vault.example.test");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn server_url_validation_accepts_only_http_schemes() {
+        assert!(is_valid_server_url("https://vault.bitwarden.com"));
+        assert!(is_valid_server_url("http://localhost:8080"));
+        assert!(!is_valid_server_url("ftp://vault.example.test"));
+        assert!(!is_valid_server_url("vault.example.test"));
+        assert!(!is_valid_server_url(""));
     }
 }

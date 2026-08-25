@@ -13,7 +13,8 @@ Greenfield Rust + Iced desktop application to organize a Bitwarden vault. Target
 2. Implement the step according to the plan
 3. Write automated tests for all components where feasible
 4. Verify all goals achieved and tests passing
-5. **Pause and prompt for confirmation before continuing to the next step**
+5. Review whether any `#[allow(...)]` attributes or TODO.md items have become obsolete; triage TODO.md items (fix, defer into the plan with a pointer, or close) and integrate accepted feedback into the plan and AGENTS.md
+6. **Pause and prompt for confirmation before continuing to the next step**
 
 **Never skip verification.** Each step must pass `cargo check`, `cargo test`, `cargo fmt --check`, and `cargo clippy` (when lint config exists) before commit.
 
@@ -108,7 +109,7 @@ wiremock 0.6
 
 **Theming**: System light/dark via `dark-light` crate + Iced Theme.
 
-**Config**: TOML `~/.config/vaultmaid/config.toml` (server_url, window, expanded nodes, PIN verifier). Secrets in keyring only.
+**Config**: TOML `~/.config/vaultmaid/config.toml` (server_url, window, expanded nodes, PIN verifier). Secrets in keyring only. Corrupt TOML is backed up to `*.bak` and replaced with defaults; values that parse but break the app (unparseable server_url, zero-size window) are repaired in place so a hand-edit typo does not discard correct fields. Config never blocks startup; corruption notices surface as non-blocking toasts (Step 16).
 
 **Platform**: Linux first, platform-agnostic code, `cargo build --release` only.
 

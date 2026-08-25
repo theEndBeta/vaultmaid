@@ -104,7 +104,7 @@ Precondition: Step 1 committed; `cargo check` green.
 #### Step 3 — Non-secret config persistence
 Precondition: Skeleton renders; no config file yet.
 - 3a. Plan: `config.rs` defines `Config { server_url, window, expanded_nodes, pin_verifier }` with `Default` (`https://vault.bitwarden.com`); preamble states TOML choice over JSON/SQLite.
-- 3b. Plan: Implement `load_or_default()` and `save()` via `dirs::config_dir()/vaultmaid/config.toml`, ensure dir creation; handle corrupt TOML -> backup + default.
+- 3b. Plan: Implement `load_or_default()` and `save()` via `dirs::config_dir()/vaultmaid/config.toml`, ensure dir creation; handle corrupt TOML -> backup + default. Values that parse but break the app (unparseable `server_url`, zero-size `window`) are repaired in place and the file rewritten, so a hand-edit typo does not discard fields the user got right.
 - 3c. Plan: Wire `Config::load_or_default()` into `app.rs` init and persist on `ServerUrlChanged`; unit test for ser/de round-trip.
 - Validation: `cargo test config` passes; deleting config recreates default.
 - Commit: `feat(config): persist server URL and window state as TOML`
@@ -218,7 +218,7 @@ Precondition: Collections work within org; no cross-org logic.
 
 #### Step 16 — Toasts, modals, progress, and undo
 Precondition: Org moves work but no unified error UI or undo.
-- 16a. Plan: `ui/components.rs` finalize toast stack (auto-dismiss 5s, Retry/Undo buttons), modal, offline banner; docs explain non-blocking requirement.
+- 16a. Plan: `ui/components.rs` finalize toast stack (auto-dismiss 5s, Retry/Undo buttons), modal, offline banner; docs explain non-blocking requirement. This is also where `config.toml` corruption reaches the user: a "config restored from backup" toast after startup, since the file itself must never block launch.
 - 16b. Plan: `state.rs` `UndoEntry { op, reverse }` stack capped at 10; on success toast include `[Undo]`; `Undo(id)` replays reverse ops optimistically with same revert path; cleared on re-sync/restart and not retaining decrypted fields.
 - 16c. Plan: Wire `Retry(id)` replaying stored `Operation` with exponential backoff for 429 (toast shows "Retrying in Ns").
 - Validation: `cargo test state::undo` cap and replay; manual Retry and Undo from toast.
