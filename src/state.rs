@@ -26,6 +26,13 @@ pub struct State {
     pub config: Config,
     #[allow(dead_code)] // toast stack is a Step 16 concern; field exists so State stays flat
     pub toasts: Vec<String>,
+    /// Live PIN field value. Kept here (not in the widget) so the update
+    /// function can hash and zero it without the view holding a copy.
+    pub pin_input: String,
+    /// Confirm field on the setup form.
+    pub pin_confirm: String,
+    /// Inline error for the PIN forms ("PINs do not match", "Incorrect PIN").
+    pub pin_error: Option<String>,
 }
 
 #[cfg(test)]

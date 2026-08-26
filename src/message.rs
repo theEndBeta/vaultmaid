@@ -28,4 +28,15 @@ pub enum Message {
     /// The login field changed. Persisted immediately so a crash after
     /// typing a self-hosted URL does not fall back to Bitwarden Cloud.
     ServerUrlChanged(String),
+    /// PIN entry field changed on either the setup or unlock form.
+    PinInput(String),
+    /// Confirm field changed on the setup form only.
+    PinConfirmInput(String),
+    /// First-launch setup completed. Carries the raw PIN; the update
+    /// function hashes it into the config verifier before anything else
+    /// touches it.
+    PinSet(String),
+    /// Unlock attempted. Verified against the config verifier in the
+    /// update function; a failure shows an error, never a lockout.
+    PinSubmitted(String),
 }

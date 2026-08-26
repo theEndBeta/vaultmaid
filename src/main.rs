@@ -11,7 +11,9 @@
 mod app;
 mod config;
 mod message;
+mod pin;
 mod state;
+mod ui;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
