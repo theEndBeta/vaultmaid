@@ -60,7 +60,7 @@ Validation: cargo check; manual rm config.toml -> restart recreates default.
 ## Tech Stack (Exact Versions)
 
 ```
-iced 0.13 (tokio, advanced)
+iced 0.14 (tokio, advanced)   # upgraded from 0.13 during Step 4; see plan Decisions
 bitwarden 0.5
 reqwest 0.12 json
 tokio 1 (full)
@@ -149,7 +149,7 @@ main/src/
 
 - **Bitwarden SDK may lack share endpoints** — verify early in Step 15, fallback to raw REST with bearer token
 - **Device-code 2FA response shapes differ** between Bitwarden Cloud and Vaultwarden — test both in Step 6
-- **Iced 0.13 drag-drop is manual implementation** — buttons/context menus are canonical path, drag is enhancement
+- **Iced drag-drop is manual implementation** (still true on 0.14) — buttons/context menus are canonical path, drag is enhancement
 - **Cache key derivation**: Argon2 with per-user salt + PIN, never use raw session token
 - **Slash-split tree**: `a` and `a/b` can both be real folders, so node can be both leaf and parent — handle explicitly in tree building
 - **Org share changes item IDs** (clones) — always re-sync after share, don't patch IDs locally

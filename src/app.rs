@@ -18,21 +18,26 @@ use iced::{Element, Theme};
 
 /// Launches the application event loop.
 ///
-/// Config is loaded in `run_with` rather than `State::default` so unit
+/// Config is loaded in `boot` rather than `State::default` so unit
 /// tests can still construct a default state without touching the XDG
 /// config directory.
 pub fn run() -> iced::Result {
-    iced::application("VaultMaid", update, view)
+    iced::application(boot, update, view)
+        .title("VaultMaid")
         .theme(theme)
-        .run_with(|| {
-            (
-                State {
-                    config: Config::load_or_default(),
-                    ..State::default()
-                },
-                iced::Task::none(),
-            )
-        })
+        .run()
+}
+
+/// Builds the initial state before the first view is rendered.
+///
+/// Iced 0.14 calls this once at startup via the `BootFn` contract; a
+/// plain `State` is enough because no startup task is needed yet (later
+/// steps will return a sync command from here).
+fn boot() -> State {
+    State {
+        config: Config::load_or_default(),
+        ..State::default()
+    }
 }
 
 /// Applies a message to the state.
@@ -72,12 +77,12 @@ fn view(state: &State) -> Element<'_, Message> {
 
 /// Resolves the Iced theme from the OS light/dark preference.
 ///
-/// Falls back to the default theme when detection is unavailable, which keeps
-/// the app usable on platforms where `dark-light` cannot probe the environment.
+/// Falls back to the light theme when detection reports no preference;
+/// 0.14 removed `Theme::default()`, so the fallback is explicit rather
+/// than delegated.
 fn theme(_state: &State) -> Theme {
     match dark_light::detect() {
         dark_light::Mode::Dark => Theme::Dark,
-        dark_light::Mode::Light => Theme::Light,
-        dark_light::Mode::Default => Theme::default(),
+        dark_light::Mode::Light | dark_light::Mode::Default => Theme::Light,
     }
 }

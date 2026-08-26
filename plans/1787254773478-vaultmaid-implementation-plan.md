@@ -4,6 +4,7 @@
 Greenfield Rust + Iced desktop app to organize a Bitwarden vault. Target ` /data/development/vaultmaid` is empty aside from `.justfile`/`.lima.yml`; Rust toolchain via Lima VM (Fedora 44). Goal: create/manage folders & collections, add/remove items from collections/folders, move between folders and orgs. Linux-first, bare release binary.
 
 ## Decisions Locked
+- **Iced version (revised 2026-08-25):** 0.14 stable, not the 0.13 pinned at planning time. 0.14.0 was released 2025-12-07 and is the current stable; switching at Step 4 cost only the app shell (boot fn + title builder), while all heavy UI work (Steps 9, 12, 14, 18) stays on the maintained API and docs.
 - **Backend:** `bitwarden` Rust SDK for auth/sync/decrypt + `reqwest` REST to `{{server}}/api` for collection/org admin gaps.
 - **Auth:** OAuth/device-code only (no master password in app). `2fa_required` -> in-app TOTP/email modal; WebAuthn/unsupported -> browser fallback. Refresh token + server + user in `keyring`.
 - **Server:** Login screen Server URL field (`https://vault.bitwarden.com` default) persisted to TOML; all calls use it.
@@ -49,7 +50,7 @@ Every file is writing for the next reader. Enforced at review and commit time.
 Precondition check + post-Step `cargo check` (+ `cargo fmt --check`, `cargo clippy` when lint config present) + behavioral check listed per Step. No Step merges broken builds.
 
 ## Stack
-`iced 0.13 (tokio, advanced)`, `bitwarden 0.5`, `reqwest 0.12 json`, `tokio full`, `serde/serde_json`, `keyring 3`, `rusqlite 0.32 bundled`, `aes-gcm 0.10`, `argon2 0.5`, `dirs 5`, `url 2`, `thiserror`, `tracing`/`tracing-subscriber`, `toml 0.8`, `wiremock` (dev).
+`iced 0.14 (tokio, advanced)` — upgraded from 0.13 during Step 4 (see Decisions), `bitwarden 0.5`, `reqwest 0.12 json`, `tokio full`, `serde/serde_json`, `keyring 3`, `rusqlite 0.32 bundled`, `aes-gcm 0.10`, `argon2 0.5`, `dirs 5`, `url 2`, `thiserror`, `tracing`/`tracing-subscriber`, `toml 0.8`, `wiremock` (dev).
 
 ## State Machine
 ```
@@ -236,7 +237,7 @@ Precondition: Feedback UI exists; app still assumes online.
 
 #### Step 18 — Drag-drop polish and shortcuts
 Precondition: Core flows work via buttons/menus; drag-drop is minimal.
-- 18a. Plan: `ui/tree.rs` + `ui/item_list.rs` visual drag feedback (highlight drop target, ghost row), fallback to buttons preserved per Risk; preamble notes Iced 0.13 manual impl.
+- 18a. Plan: `ui/tree.rs` + `ui/item_list.rs` visual drag feedback (highlight drop target, ghost row), fallback to buttons preserved per Risk; preamble notes Iced drag-drop is manual implementation.
 - 18b. Plan: Context menus finished (right-click item/folder/collection), keyboard: F2 rename, Delete remove, Ctrl+Z undo, Ctrl+A select all, Ctrl+F focus search; shortcuts listed in detail pane tooltip.
 - 18c. Plan: Empty states and dimming pass; ensure trash node never offers move/drop.
 - Validation: Manual drag-drop + all shortcuts; no regression on fallback buttons.
@@ -253,7 +254,7 @@ Precondition: All features implemented; test coverage partial.
 ## Risks / Gotchas
 - `bitwarden` SDK may lack share endpoints -> verify in Step 15 early; raw REST bearer fallback.
 - Device-code 2FA shapes differ Cloud vs Vaultwarden -> test both in Step 6.
-- Iced 0.13 drag-drop manual -> buttons/menus are canonical; drag is enhancement (Step 18).
+- Iced drag-drop remains manual even on 0.14 -> buttons/menus are canonical; drag is enhancement (Step 18).
 - Cache key: Argon2 with per-user salt + PIN-derived; never raw token; Step 4/7 must stay aligned.
 - Slash-split `a` and `a/b` both real folders -> tree node is leaf+parent; covered in Step 9/19 tests.
 - Org share changes item IDs -> always re-sync after Step 15; don't patch IDs locally.
