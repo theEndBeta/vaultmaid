@@ -8,6 +8,7 @@
 // struct may be constructed multiple times during hot-reload scenarios, and we
 // want a single subscriber for the entire process lifetime.
 
+mod api;
 mod app;
 mod config;
 mod message;
