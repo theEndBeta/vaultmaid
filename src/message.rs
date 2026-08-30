@@ -32,11 +32,11 @@ pub enum Message {
     PinInput(String),
     /// Confirm field changed on the setup form only.
     PinConfirmInput(String),
-    /// First-launch setup completed. Carries the raw PIN; the update
-    /// function hashes it into the config verifier before anything else
-    /// touches it.
-    PinSet(String),
+    /// First-launch setup completed. Carries the typed PIN as a
+    /// zeroizing `Pin`; the update function hashes it into the config
+    /// verifier before anything else touches it.
+    PinSet(crate::pin::Pin),
     /// Unlock attempted. Verified against the config verifier in the
     /// update function; a failure shows an error, never a lockout.
-    PinSubmitted(String),
+    PinSubmitted(crate::pin::Pin),
 }

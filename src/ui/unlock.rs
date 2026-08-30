@@ -27,7 +27,7 @@ pub fn view<'a>(pin: &'a str, error: Option<&'a str>) -> Element<'a, Message> {
 
     let submit_button = button("Unlock")
         .on_press_maybe(if !pin.is_empty() {
-            Some(Message::PinSubmitted(pin.to_owned()))
+            Some(Message::PinSubmitted(crate::pin::Pin::new(pin)))
         } else {
             None
         })

@@ -84,7 +84,7 @@ fn update(state: &mut State, message: Message) {
             let result = state
                 .config
                 .pin_verifier
-                .as_deref()
+                .as_ref()
                 .map(|verifier| crate::pin::verify(&pin, verifier));
             clear_pin_fields(state);
             match result {
@@ -194,15 +194,11 @@ mod tests {
     fn pin_set_hashes_verifier_and_locks() {
         with_temp_config_dir(|| {
             let mut state = state_at_screen(Screen::SetPin);
-            update(&mut state, Message::PinSet("1234".to_owned()));
+            update(&mut state, Message::PinSet(crate::pin::Pin::new("1234")));
 
             assert_eq!(state.screen, Screen::Unlock);
-            let verifier = state
-                .config
-                .pin_verifier
-                .as_deref()
-                .expect("verifier stored");
-            assert!(crate::pin::verify("1234", verifier).expect("verify"));
+            let verifier = state.config.pin_verifier.as_ref().expect("verifier stored");
+            assert!(crate::pin::verify(&crate::pin::Pin::new("1234"), verifier).expect("verify"));
             // Plaintext must not survive the update frame.
             assert!(state.pin_input.is_empty());
             assert!(state.pin_confirm.is_empty());
@@ -212,10 +208,13 @@ mod tests {
 
     #[test]
     fn pin_submitted_with_correct_pin_opens_main() {
-        let verifier = crate::pin::hash_pin("1234").expect("hash");
+        let verifier = crate::pin::hash_pin(&crate::pin::Pin::new("1234")).expect("hash");
         let mut state = state_at_screen(Screen::Unlock);
         state.config.pin_verifier = Some(verifier);
-        update(&mut state, Message::PinSubmitted("1234".to_owned()));
+        update(
+            &mut state,
+            Message::PinSubmitted(crate::pin::Pin::new("1234")),
+        );
 
         assert_eq!(state.screen, Screen::Main);
         assert!(state.pin_error.is_none());
@@ -224,10 +223,13 @@ mod tests {
 
     #[test]
     fn pin_submitted_with_wrong_pin_shows_error() {
-        let verifier = crate::pin::hash_pin("1234").expect("hash");
+        let verifier = crate::pin::hash_pin(&crate::pin::Pin::new("1234")).expect("hash");
         let mut state = state_at_screen(Screen::Unlock);
         state.config.pin_verifier = Some(verifier);
-        update(&mut state, Message::PinSubmitted("9999".to_owned()));
+        update(
+            &mut state,
+            Message::PinSubmitted(crate::pin::Pin::new("9999")),
+        );
 
         assert_eq!(
             state.screen,
@@ -240,7 +242,10 @@ mod tests {
     #[test]
     fn pin_submitted_without_verifier_shows_error() {
         let mut state = state_at_screen(Screen::Unlock);
-        update(&mut state, Message::PinSubmitted("1234".to_owned()));
+        update(
+            &mut state,
+            Message::PinSubmitted(crate::pin::Pin::new("1234")),
+        );
         assert_eq!(
             state.pin_error.as_deref(),
             Some("PIN verifier is missing or corrupt")

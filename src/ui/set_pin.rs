@@ -7,7 +7,7 @@
 //! is out of scope because the PIN is local-only and not transmitted.
 //!
 //! This module does not hash the PIN or write it to config. It emits
-//! `Message::PinSet(String)` when the user confirms a valid PIN; the
+//! `Message::PinSet(Pin)` when the user confirms a valid PIN; the
 //! update function in `app.rs` handles hashing and persistence.
 
 use iced::widget::{button, column, container, text, text_input};
@@ -56,7 +56,7 @@ pub fn view<'a>(pin: &'a str, confirm: &'a str, error: Option<&'a str>) -> Eleme
     let valid = pin.len() >= 4 && pin == confirm;
     let submit_button = button("Set PIN")
         .on_press_maybe(if valid {
-            Some(Message::PinSet(pin.to_owned()))
+            Some(Message::PinSet(crate::pin::Pin::new(pin)))
         } else {
             None
         })

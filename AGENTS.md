@@ -91,7 +91,7 @@ wiremock 0.6
 
 **Cache**: SQLite `~/.config/vaultmaid/cache.db`, single encrypted blob per user. Key derived from local PIN via Argon2 + AES-256-GCM. Load behind PIN, then sync.
 
-**PIN**: Local PIN set on first launch. Argon2 verifier in config, cache key derived from PIN (not session token). Biometric hook stub for future keyring Secret Service path.
+**PIN**: Local PIN set on first launch. Argon2 verifier in config, cache key derived from PIN (not session token). Biometric hook stub for future keyring Secret Service path. `Pin` and `Verifier` are distinct newtypes (never bare `&str` pairs): `Pin` wraps `Zeroizing<String>` so plaintext wipes on drop, `Verifier` is serde-transparent so config.toml stays a plain string.
 
 **Vault lock**: 15 min idle + manual Lock. Wipes decrypted vault from memory (zeroize via `Option::take`), shows PIN unlock. Undo entries store only IDs/ops, never decrypted fields.
 

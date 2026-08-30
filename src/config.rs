@@ -26,6 +26,7 @@
 //! zero-size window) are repaired in place: a hand-edit typo is not file
 //! damage, and the fields the user got right should survive the load.
 
+use crate::pin::Verifier;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -42,7 +43,7 @@ const FILE_NAME: &str = "config.toml";
 
 /// Non-secret preferences that survive a process restart.
 ///
-/// `pin_verifier` is an opaque Argon2 string, not the PIN. Storing the
+/// `pin_verifier` is an Argon2 verifier, not the PIN. Storing the
 /// verifier here (rather than in the keyring) keeps unlock possible when
 /// the keyring is locked or unavailable, and keeps the keyring reserved
 /// for tokens that grant network access.
@@ -51,7 +52,7 @@ pub struct Config {
     pub server_url: String,
     pub window: WindowState,
     pub expanded_nodes: Vec<String>,
-    pub pin_verifier: Option<String>,
+    pub pin_verifier: Option<Verifier>,
 }
 
 /// Last-known window size only.
@@ -294,7 +295,7 @@ mod tests {
                 height: 900,
             },
             expanded_nodes: vec!["Finance".into(), "Finance/Banks".into()],
-            pin_verifier: Some("$argon2id$v=19$test".into()),
+            pin_verifier: Some(Verifier::new("$argon2id$v=19$test")),
         };
 
         let encoded = toml::to_string(&original).expect("serialize");
