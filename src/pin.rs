@@ -133,7 +133,29 @@ pub fn verify(pin: &Pin, verifier: &Verifier) -> Result<bool, PinError> {
     }
 }
 
-/// Derive a 32-byte cache key from a PIN and its verifier.
+/// The AES-256 key that encrypts the vault cache, plus the salt it was
+/// derived with.
+///
+/// The salt is carried alongside the key because the cache row records
+/// the derivation inputs that produced its ciphertext; without it a
+/// future key-rotation path could not tell which salt to reuse. It is
+/// not secret — the PIN is the secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CacheKey {
+    pub key: [u8; 32],
+    pub salt: Vec<u8>,
+}
+
+impl fmt::Debug for CacheKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CacheKey")
+            .field("key", &"***")
+            .field("salt", &self.salt)
+            .finish()
+    }
+}
+
+/// Derive a cache key from a PIN and its verifier.
 ///
 /// The cache key is what encrypts the vault snapshot in SQLite. It must
 /// be deterministic: the same PIN + verifier always produces the same
@@ -145,8 +167,7 @@ pub fn verify(pin: &Pin, verifier: &Verifier) -> Result<bool, PinError> {
 /// secret. The cache key is local-only; if the user forgets the PIN,
 /// the cache is unrecoverable (by design — there is no "forgot PIN"
 /// flow because the server never saw it).
-#[allow(dead_code)] // wired in Step 7, where the encrypted cache uses this key
-pub fn derive_cache_key(pin: &Pin, verifier: &Verifier) -> Result<[u8; 32], PinError> {
+pub fn derive_cache_key(pin: &Pin, verifier: &Verifier) -> Result<CacheKey, PinError> {
     let parsed = PasswordHash::new(verifier.as_str())
         .map_err(|e| PinError::MalformedVerifier(e.to_string()))?;
     let salt = parsed
@@ -158,7 +179,10 @@ pub fn derive_cache_key(pin: &Pin, verifier: &Verifier) -> Result<[u8; 32], PinE
     argon2
         .hash_password_into(pin.expose().as_bytes(), salt.as_str().as_bytes(), &mut key)
         .map_err(|e| PinError::HashError(e.to_string()))?;
-    Ok(key)
+    Ok(CacheKey {
+        key,
+        salt: salt.as_str().as_bytes().to_vec(),
+    })
 }
 
 /// Biometric unlock hook (stub).

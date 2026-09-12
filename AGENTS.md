@@ -69,6 +69,7 @@ keyring 3
 rusqlite 0.32 (bundled)
 aes-gcm 0.10
 argon2 0.5
+sha2 0.10
 dirs 5
 url 2
 thiserror 1
@@ -94,7 +95,7 @@ wiremock 0.6
 
 **Scope**: Organization-only — mutate `folderId`, `collectionIds`, `organizationId`. **Never edit item fields.**
 
-**Cache**: SQLite `~/.config/vaultmaid/cache.db`, single encrypted blob per user. Key derived from local PIN via Argon2 + AES-256-GCM. Load behind PIN, then sync.
+**Cache**: SQLite `~/.config/vaultmaid/cache.db`, one encrypted blob per user. Row id is SHA-256(user_id) base64url so the file does not name its owner; columns `id, blob, nonce, salt, updated_at` (epoch seconds). AES-256-GCM with a fresh random 96-bit nonce per write; the whole snapshot is one blob (no per-record metadata leakage). Key is `CacheKey { key, salt }` derived from the PIN via the verifier's salt. WAL journaling; missing/corrupt/wrong-key rows are deleted and reported as `None` so sync can rebuild. Load behind PIN on unlock, then sync.
 
 **PIN**: Local PIN set on first launch. Argon2 verifier in config, cache key derived from PIN (not session token). Biometric hook stub for future keyring Secret Service path. `Pin` and `Verifier` are distinct newtypes (never bare `&str` pairs): `Pin` wraps `Zeroizing<String>` so plaintext wipes on drop, `Verifier` is serde-transparent so config.toml stays a plain string.
 

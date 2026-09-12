@@ -15,6 +15,7 @@
 use crate::api::auth::{DeviceCode, Session};
 use crate::config::Config;
 use crate::message::Screen;
+use crate::pin::CacheKey;
 
 /// The entire runtime state of the application.
 ///
@@ -46,6 +47,11 @@ pub struct State {
     pub auth_busy: bool,
     /// User-facing authentication error.
     pub auth_error: Option<String>,
+    /// AES key derived from the PIN on unlock. Held for the session so
+    /// sync can re-encrypt the snapshot without re-prompting for the PIN.
+    pub cache_key: Option<CacheKey>,
+    /// Decrypted snapshot loaded from the cache, if one was readable.
+    pub cached_vault: Option<String>,
 }
 
 #[cfg(test)]

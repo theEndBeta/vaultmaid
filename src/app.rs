@@ -18,6 +18,7 @@
 
 use crate::api;
 use crate::api::auth::{self, AuthTokens, DeviceInfo, PollOutcome, Session};
+use crate::cache::Cache;
 use crate::config::Config;
 use crate::message::{Message, Screen};
 use crate::state::State;
@@ -114,9 +115,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             clear_pin_fields(state);
             match result {
                 Some(Ok(true)) => {
-                    // Cache decryption lands in Step 7; for now a correct
-                    // PIN simply opens the main view.
                     state.screen = Screen::Main;
+                    // The PIN is still held here, so derive the cache key and
+                    // load any stored snapshot before the field is dropped.
+                    unlock_cache(state, &pin);
                 }
                 Some(Ok(false)) => {
                     state.pin_error = Some("Incorrect PIN".to_owned());
@@ -300,12 +302,22 @@ fn logout(state: &mut State) -> Task<Message> {
         if let Err(error) = auth::clear_refresh_token(&user_id) {
             tracing::warn!(%error, "could not clear refresh token");
         }
+        match Cache::open_default() {
+            Ok(cache) => {
+                if let Err(error) = cache.discard(&user_id) {
+                    tracing::warn!(%error, "could not clear cached vault");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "could not open cache database"),
+        }
     }
     state.session = None;
     state.device_code = None;
     state.two_factor_input.clear();
     state.auth_error = None;
     state.auth_busy = false;
+    state.cache_key = None;
+    state.cached_vault = None;
     state.config.last_user_id = None;
     if let Err(error) = state.config.save() {
         tracing::warn!(%error, "could not persist logout");
@@ -391,6 +403,54 @@ fn clear_pin_fields(state: &mut State) {
     state.pin_confirm.clear();
 }
 
+/// Derives the cache key and loads the stored snapshot after unlock.
+///
+/// Runs only on a successful PIN check, so the key exists in memory only
+/// for the life of the session. A missing snapshot is normal on a first
+/// unlock and simply leaves `cached_vault` empty for sync to fill in.
+fn unlock_cache(state: &mut State, pin: &crate::pin::Pin) {
+    let Some(verifier) = state.config.pin_verifier.as_ref() else {
+        return;
+    };
+    match crate::pin::derive_cache_key(pin, verifier) {
+        Ok(key) => {
+            state.cache_key = Some(key);
+            load_cached_vault(state);
+        }
+        Err(error) => tracing::error!(%error, "could not derive cache key"),
+    }
+}
+
+/// Loads the cached snapshot for the current session, if any.
+///
+/// Requires both a derived key and a known user id; before login
+/// completes there is no user to look up, so this is a no-op.
+fn load_cached_vault(state: &mut State) {
+    let Some(key) = state.cache_key.clone() else {
+        return;
+    };
+    let Some(user_id) = state
+        .session
+        .as_ref()
+        .and_then(|session| session.user_id.clone())
+    else {
+        return;
+    };
+
+    match Cache::open_default() {
+        Ok(cache) => match cache.load_vault(&user_id, &key) {
+            Ok(snapshot) => {
+                if let Some(json) = &snapshot {
+                    tracing::info!(bytes = json.len(), "loaded cached vault snapshot");
+                }
+                state.cached_vault = snapshot;
+            }
+            Err(error) => tracing::warn!(%error, "could not load cached vault"),
+        },
+        Err(error) => tracing::warn!(%error, "could not open cache database"),
+    }
+}
+
 /// Renders the active screen.
 fn view(state: &State) -> Element<'_, Message> {
     match state.screen {
@@ -411,7 +471,13 @@ fn view(state: &State) -> Element<'_, Message> {
             state.pin_error.as_deref(),
         ),
         Screen::Unlock => ui::unlock::view(&state.pin_input, state.pin_error.as_deref()),
-        Screen::Main => column![text("Main").size(24)].into(),
+        Screen::Main => {
+            let label = match &state.cached_vault {
+                Some(json) => format!("Main — cached snapshot: {} bytes", json.len()),
+                None => "Main".to_owned(),
+            };
+            column![text(label).size(24)].into()
+        }
     }
 }
 
@@ -663,7 +729,63 @@ mod tests {
             assert!(state.session.is_none());
             assert!(state.device_code.is_none());
             assert!(state.config.last_user_id.is_none());
+            assert!(state.cache_key.is_none());
+            assert!(state.cached_vault.is_none());
             assert_eq!(state.screen, Screen::Login);
+        });
+    }
+
+    #[test]
+    fn unlock_loads_cached_snapshot() {
+        with_temp_config_dir(|| {
+            let pin = crate::pin::Pin::new("1234");
+            let verifier = crate::pin::hash_pin(&pin).expect("hash");
+
+            let mut state = State::default();
+            state.config.pin_verifier = Some(verifier.clone());
+            state.session = Some(Session {
+                access_token: "token".to_owned(),
+                user_id: Some("user-9".to_owned()),
+            });
+
+            // Persist a snapshot under the key the same PIN will derive,
+            // mirroring what a prior sync would have written.
+            let key = crate::pin::derive_cache_key(&pin, &verifier).expect("derive");
+            crate::cache::Cache::open_default()
+                .expect("open cache")
+                .save_vault("user-9", &key, "{\"folders\":[]}")
+                .expect("save");
+
+            let _ = update(
+                &mut state,
+                Message::PinSubmitted(crate::pin::Pin::new("1234")),
+            );
+
+            assert_eq!(state.screen, Screen::Main);
+            assert!(state.cache_key.is_some());
+            assert_eq!(state.cached_vault.as_deref(), Some("{\"folders\":[]}"));
+        });
+    }
+
+    #[test]
+    fn logout_discards_cached_snapshot() {
+        with_temp_config_dir(|| {
+            let key = crate::pin::CacheKey {
+                key: [3u8; 32],
+                salt: b"salt".to_vec(),
+            };
+            let cache = crate::cache::Cache::open_default().expect("open cache");
+            cache.save_vault("user-9", &key, "{}").expect("save");
+
+            let mut state = State::default();
+            state.config.last_user_id = Some("user-9".to_owned());
+            state.cache_key = Some(key.clone());
+            state.cached_vault = Some("{}".to_owned());
+
+            let _ = update(&mut state, Message::Logout);
+
+            assert!(state.cached_vault.is_none());
+            assert!(cache.load_vault("user-9", &key).expect("load").is_none());
         });
     }
 }

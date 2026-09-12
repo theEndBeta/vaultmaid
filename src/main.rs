@@ -10,6 +10,7 @@
 
 mod api;
 mod app;
+mod cache;
 mod config;
 mod message;
 mod pin;

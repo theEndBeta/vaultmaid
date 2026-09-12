@@ -138,8 +138,8 @@ Precondition: Client wrapper exists; no auth flow.
 Precondition: Auth stores refresh token; no cache yet.
 - 7a. Plan: `cache/encryption.rs` `encrypt(blob, key)->(nonce,ciphertext)` and `decrypt` via AES-256-GCM with random 96-bit nonce; preamble states blob-level encryption tradeoff.
 - 7b. Plan: `cache/storage.rs` init SQLite at `cache.db`, table `cache(id TEXT PK, blob BLOB, nonce BLOB, salt BLOB, updated_at TEXT)`; per-user `id = hash(user_id)`; ensure `PRAGMA journal_mode=WAL`.
-- 7c. Plan: `cache/mod.rs` `save_vault(user_id, pin_key, json)` and `load_vault(user_id, pin_key)->Option<json>` using encryption; test round-trip; app loads cache behind PIN before sync.
-- Validation: `cargo test cache::` encrypt/decrypt + storage round-trip; corrupt blob handled.
+- 7c. Plan: `cache/mod.rs` `Cache` surface with `save_vault(user_id, CacheKey, json)` and `load_vault(user_id, CacheKey)->Option<json>`. `derive_cache_key` now returns a `CacheKey { key, salt }` so the row's `salt` column records the derivation inputs. Unreadable rows are deleted and reported as `None` (self-healing) instead of surfacing a crypto error. App derives the key and loads the snapshot on PIN unlock, and discards the row on logout; `save_vault` is wired by Step 8 sync once there is a vault to persist.
+- Validation: `cargo test cache::` encrypt/decrypt (round-trip, wrong key, tampered ciphertext, fresh nonce) + storage round-trip + corrupt/wrong-key discard; app reducer test that unlock loads a stored snapshot and logout discards it.
 - Commit: `feat(cache): add encrypted SQLite vault snapshot`
 
 ### Phase 2 — Sync + Shell UI
