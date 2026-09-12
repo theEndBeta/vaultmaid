@@ -72,6 +72,9 @@ argon2 0.5
 dirs 5
 url 2
 thiserror 1
+zeroize 1
+base64 0.22
+uuid 1 (v4)
 tracing 0.1, tracing-subscriber 0.3
 toml 0.8
 dark-light 1
@@ -83,7 +86,9 @@ wiremock 0.6
 
 ## Architecture Decisions
 
-**Auth**: OAuth/device-code only (no master password in app). 2FA via in-app TOTP/email modal; WebAuthn → browser fallback. Refresh token + server + user in keyring.
+**Auth**: OAuth/device-code only (no master password in app). 2FA via in-app TOTP/email modal; WebAuthn → browser fallback. Refresh token in keyring under `vaultmaid` / `refresh:{user_id}`; `last_user_id` + `device_identifier` in config. Update returns `Task`, so auth steps run as futures and polling is driven by delayed messages honoring the server `interval` (plus 5s on `slow_down`).
+
+**Device-code endpoints**: device authorization is `/identity/connect/device-authorization` and token polling/refresh is `/identity/connect/token`. The authorization path is a constant in `api/auth.rs`; verify against a live server before trusting it.
 
 **Server**: Login screen Server URL field (default `https://vault.bitwarden.com`) persisted to TOML. All API calls use it.
 
@@ -109,7 +114,7 @@ wiremock 0.6
 
 **Theming**: System light/dark via `dark-light` crate + Iced Theme.
 
-**Config**: TOML `~/.config/vaultmaid/config.toml` (server_url, window, expanded nodes, PIN verifier). Secrets in keyring only. Corrupt TOML is backed up to `*.bak` and replaced with defaults; values that parse but break the app (unparseable server_url, zero-size window) are repaired in place so a hand-edit typo does not discard correct fields. Config never blocks startup; corruption notices surface as non-blocking toasts (Step 16).
+**Config**: TOML `~/.config/vaultmaid/config.toml` (server_url, window, expanded nodes, PIN verifier, last_user_id, device_identifier). Secrets in keyring only. Corrupt TOML is backed up to `*.bak` and replaced with defaults; values that parse but break the app (unparseable server_url, zero-size window) are repaired in place so a hand-edit typo does not discard correct fields. Config never blocks startup; corruption notices surface as non-blocking toasts (Step 16).
 
 **Platform**: Linux first, platform-agnostic code, `cargo build --release` only.
 
@@ -148,7 +153,7 @@ main/src/
 ## Key Technical Gotchas
 
 - **Bitwarden SDK may lack share endpoints** — verify early in Step 15, fallback to raw REST with bearer token
-- **Device-code 2FA response shapes differ** between Bitwarden Cloud and Vaultwarden — test both in Step 6
+- **Device-code 2FA response shapes differ** between Bitwarden Cloud and Vaultwarden — test both in Step 6. The device-authorization endpoint path is a constant in `api/auth.rs`; verify it against a live server at the first manual run.
 - **Iced drag-drop is manual implementation** (still true on 0.14) — buttons/context menus are canonical path, drag is enhancement
 - **Cache key derivation**: Argon2 with per-user salt + PIN, never use raw session token
 - **Slash-split tree**: `a` and `a/b` can both be real folders, so node can be both leaf and parent — handle explicitly in tree building

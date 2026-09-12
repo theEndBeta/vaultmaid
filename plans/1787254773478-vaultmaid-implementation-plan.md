@@ -22,7 +22,7 @@ Greenfield Rust + Iced desktop app to organize a Bitwarden vault. Target ` /data
 - **Confirmations:** Selective (deletes, org share/clone, remove-from-collection). Folder moves no confirm (undo).
 - **Undo:** In-memory last 10 bulk/single moves; success toast `[Undo]` replays reverse; cleared on re-sync/restart.
 - **Theming:** System light/dark via Iced Theme.
-- **Config:** TOML `~/.config/vaultmaid/config.toml` (server_url, window, expanded nodes, PIN verifier). Secrets in keyring only.
+- **Config:** TOML `~/.config/vaultmaid/config.toml` (server_url, window, expanded nodes, PIN verifier, last_user_id, device_identifier). Secrets in keyring only. `last_user_id` lets a restart find the keyring refresh token; `device_identifier` is a stable per-install id so Bitwarden does not treat each launch as a new device.
 - **Platform/packaging:** Linux first, platform-agnostic code, `cargo build --release` only.
 
 ## Literate-Programming Contract (applies to every source file)
@@ -128,10 +128,10 @@ Precondition: Config and PIN modules committed; no network code.
 
 #### Step 6 — Device-code auth + persistent session
 Precondition: Client wrapper exists; no auth flow.
-- 6a. Plan: `api/auth.rs` `start_device_code(client)` -> POST `{{server}}/identity/connect/token` with `grant_type=device_code`; parse `device_code, user_code, verification_uri, interval`.
-- 6b. Plan: `poll_device_code(client, device_code)` loop with interval, mapping `authorization_pending`/`slow_down`/`2fa_required`/`expired_token`; store `refresh_token` in `keyring` (`vaultmaid:refresh:{user_id}`).
-- 6c. Plan: In-app TOTP/email prompt flow (emit `TwoFACodeSubmitted` -> retry poll with `two_factor_token`); WebAuthn fallback opens `verification_uri` via `open` crate; `silent_refresh()` on launch and logout wipe; `ui/login.rs` wired to show `user_code` + link + polling spinner.
-- Validation: `wiremock` tests for device-code start/poll/2fa/refresh/401 fallback; manual against Vaultwarden optional.
+- 6a. Plan: `api/auth.rs` `start_device_code(client)` -> POST the identity device-authorization endpoint (`/identity/connect/device-authorization`) with `client_id`, `deviceType`, `deviceIdentifier`, `deviceName`, `scope`; parse `device_code, user_code, verification_uri, interval`. (Corrected from the original single-endpoint note: RFC 8628 splits device authorization from token polling. The endpoint path is a module constant and must be verified against a live Bitwarden/Vaultwarden server before manual validation.)
+- 6b. Plan: `poll_device_code(client, device, device_code)` single poll of `/identity/connect/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`, mapping `authorization_pending`/`slow_down`/`expired_token`/`access_denied` and Bitwarden's `TwoFactorProviders` payload; caller drives the loop with a delayed message so `interval` (and `slow_down` backoff) is honored; store `refresh_token` in `keyring` (`vaultmaid` service, `refresh:{user_id}`) and the user id in config for restart lookup.
+- 6c. Plan: In-app TOTP/email prompt flow (emit `TwoFactorSubmitted` -> retry poll with `two_factor_token`); verification link opened via `open` crate; `silent_refresh()` on launch (boot loads keyring token for config's `last_user_id`) and `Logout` wipes keyring + session; `ui/login.rs` shows server URL + `user_code` + browser link + waiting/2FA states.
+- Validation: `wiremock` tests for device-code start/poll/2fa/refresh/401 fallback; manual against a real server optional.
 - Commit: `feat(auth): implement device-code flow with 2FA and keyring session`
 
 #### Step 7 — Encrypted SQLite cache
@@ -253,7 +253,7 @@ Precondition: All features implemented; test coverage partial.
 
 ## Risks / Gotchas
 - `bitwarden` SDK may lack share endpoints -> verify in Step 15 early; raw REST bearer fallback.
-- Device-code 2FA shapes differ Cloud vs Vaultwarden -> test both in Step 6.
+- Device-code 2FA shapes differ Cloud vs Vaultwarden -> test both in Step 6. The device-authorization endpoint path is a guess pinned as a constant in `api/auth.rs`; verify against a live server at first manual run and adjust there only..
 - Iced drag-drop remains manual even on 0.14 -> buttons/menus are canonical; drag is enhancement (Step 18).
 - Cache key: Argon2 with per-user salt + PIN-derived; never raw token; Step 4/7 must stay aligned.
 - Slash-split `a` and `a/b` both real folders -> tree node is leaf+parent; covered in Step 9/19 tests.

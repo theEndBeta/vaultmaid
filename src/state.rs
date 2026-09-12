@@ -7,9 +7,12 @@
 // unwrap layers before rendering. Flat fields with an explicit Screen
 // discriminator make the active flow obvious and keep matches shallow.
 //
-// Sub-states (login form, PIN entry, vault data) are added as optional fields
-// here as later steps introduce them; this file only establishes the skeleton.
+// The authenticated session lives here as an `Option<Session>` whose Debug
+// is masked, so deriving Debug on State cannot leak tokens into logs. The
+// PIN form fields are cleared as soon as they are consumed; the same
+// discipline applies when auth material is dropped on logout.
 
+use crate::api::auth::{DeviceCode, Session};
 use crate::config::Config;
 use crate::message::Screen;
 
@@ -33,6 +36,16 @@ pub struct State {
     pub pin_confirm: String,
     /// Inline error for the PIN forms ("PINs do not match", "Incorrect PIN").
     pub pin_error: Option<String>,
+    /// Authenticated session; `None` until login or silent refresh.
+    pub session: Option<Session>,
+    /// Device code currently awaiting browser approval.
+    pub device_code: Option<DeviceCode>,
+    /// Live 2FA code entry.
+    pub two_factor_input: String,
+    /// A network auth step is in flight; views show a spinner.
+    pub auth_busy: bool,
+    /// User-facing authentication error.
+    pub auth_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -44,6 +57,8 @@ mod tests {
         let state = State::default();
         assert_eq!(state.screen, Screen::Login);
         assert!(state.toasts.is_empty());
+        assert!(state.session.is_none());
+        assert!(!state.auth_busy);
         assert_eq!(state.config, crate::config::Config::default());
     }
 }

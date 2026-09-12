@@ -11,4 +11,5 @@
 //! is consistent across all requests. Callers never manually prepend
 //! the server URL or add Authorization headers.
 
+pub mod auth;
 pub mod client;

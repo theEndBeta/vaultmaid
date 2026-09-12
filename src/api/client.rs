@@ -15,8 +15,9 @@
 //! backoff, 401 to trigger re-auth, 403 to show permission errors).
 //! Other status codes become `Other` with the status code preserved.
 
-// Everything below is exercised from Step 6 onward; the allow is removed
-// once api/auth.rs constructs the client.
+// Device-code auth (Step 6) uses `new`/`url`/`http`. The bearer helpers
+// (`with_token`, `auth_header`) and `ApiPrefix::Api` are exercised from
+// Step 8's authenticated sync onward; the allow is removed then.
 #![allow(dead_code)]
 
 use reqwest::StatusCode;

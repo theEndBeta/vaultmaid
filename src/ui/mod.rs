@@ -5,5 +5,6 @@
 //! logic lives here. The `app.rs` module owns the update function and
 //! dispatches to these views based on `State::screen`.
 
+pub mod login;
 pub mod set_pin;
 pub mod unlock;

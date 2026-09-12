@@ -53,6 +53,14 @@ pub struct Config {
     pub window: WindowState,
     pub expanded_nodes: Vec<String>,
     pub pin_verifier: Option<Verifier>,
+    /// User id of the last successful login, so a restart can find the
+    /// refresh token in the keyring without asking the user who they are.
+    #[serde(default)]
+    pub last_user_id: Option<String>,
+    /// Stable per-install device id sent to Bitwarden. Generated once so
+    /// the server does not treat every launch as a new device.
+    #[serde(default)]
+    pub device_identifier: Option<String>,
 }
 
 /// Last-known window size only.
@@ -73,6 +81,8 @@ impl Default for Config {
             window: WindowState::default(),
             expanded_nodes: Vec::new(),
             pin_verifier: None,
+            last_user_id: None,
+            device_identifier: None,
         }
     }
 }
@@ -296,6 +306,8 @@ mod tests {
             },
             expanded_nodes: vec!["Finance".into(), "Finance/Banks".into()],
             pin_verifier: Some(Verifier::new("$argon2id$v=19$test")),
+            last_user_id: Some("user-42".to_owned()),
+            device_identifier: Some("device-abc".to_owned()),
         };
 
         let encoded = toml::to_string(&original).expect("serialize");
@@ -326,6 +338,7 @@ mod tests {
             },
             expanded_nodes: vec!["Work".into()],
             pin_verifier: None,
+            ..Config::default()
         };
         original.save_to(&path).expect("save");
         let loaded = Config::load_from(&path);
@@ -362,6 +375,7 @@ mod tests {
             },
             expanded_nodes: vec!["Work".into()],
             pin_verifier: None,
+            ..Config::default()
         };
         original.save_to(&path).expect("save bad config");
 
@@ -393,6 +407,7 @@ mod tests {
             },
             expanded_nodes: vec![],
             pin_verifier: None,
+            ..Config::default()
         };
         original.save_to(&path).expect("save bad config");
 
@@ -409,5 +424,29 @@ mod tests {
         assert!(!is_valid_server_url("ftp://vault.example.test"));
         assert!(!is_valid_server_url("vault.example.test"));
         assert!(!is_valid_server_url(""));
+    }
+
+    #[test]
+    fn older_config_without_session_fields_still_loads() {
+        let path = isolated_path("legacy");
+        fs::write(
+            &path,
+            r#"
+server_url = "https://vault.example.test"
+expanded_nodes = []
+
+[window]
+width = 900
+height = 700
+"#,
+        )
+        .expect("write legacy config");
+
+        let loaded = Config::load_from(&path);
+        assert_eq!(loaded.server_url, "https://vault.example.test");
+        assert!(loaded.pin_verifier.is_none());
+        assert!(loaded.last_user_id.is_none());
+        assert!(loaded.device_identifier.is_none());
+        cleanup(&path);
     }
 }
