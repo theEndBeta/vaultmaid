@@ -128,7 +128,7 @@ Launch -> (keyring session?) --yes--> RestoreSession --ok--> Locked (need PIN) -
 
 MainView <-> Locked (idle 15m / manual Lock wipes VaultState)
 MainView -> OfflineReadOnly (network loss, CacheLoaded) -> MainView (reconnect+sync)
-Logout -> wipe keyring/cache/PIN verifier -> Login
+Logout -> wipe keyring/cache/session (PIN verifier retained; wiping it would force PIN re-setup) -> Login
 ```
 
 ## Project Structure
@@ -154,7 +154,7 @@ main/src/
 ## Key Technical Gotchas
 
 - **Bitwarden SDK may lack share endpoints** — verify early in Step 15, fallback to raw REST with bearer token
-- **Device-code 2FA response shapes differ** between Bitwarden Cloud and Vaultwarden — test both in Step 6. The device-authorization endpoint path is a constant in `api/auth.rs`; verify it against a live server at the first manual run.
+- **Device-code 2FA response shapes differ** between Bitwarden Cloud and Vaultwarden — test both in Step 6. The device-authorization endpoint path is a constant in `api/auth.rs`; verify it against a live server at the first manual run. The second factor is submitted as Bitwarden extension fields `twoFactorToken` + `twoFactorProvider` (camelCase, matching official clients), with the provider id chosen from the server's `TwoFactorProviders` payload — confirm both against a live server too.
 - **Iced drag-drop is manual implementation** (still true on 0.14) — buttons/context menus are canonical path, drag is enhancement
 - **Cache key derivation**: Argon2 with per-user salt + PIN, never use raw session token
 - **Slash-split tree**: `a` and `a/b` can both be real folders, so node can be both leaf and parent — handle explicitly in tree building

@@ -17,7 +17,9 @@
 // when the OS switches themes while the app is running.
 
 use crate::api;
-use crate::api::auth::{self, AuthTokens, DeviceInfo, PollOutcome, Session};
+use crate::api::auth::{
+    self, preferred_provider, AuthTokens, DeviceInfo, PollOutcome, Session, TwoFactor,
+};
 use crate::cache::Cache;
 use crate::config::Config;
 use crate::message::{Message, Screen};
@@ -140,6 +142,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::DeviceCodeReceived(code) => {
             let interval = code.interval.max(1);
             state.device_code = Some(code);
+            state.poll_backoff = 0;
             state.auth_busy = false;
             state.screen = Screen::DeviceCode;
             Task::perform(wait_for(interval), |()| Message::PollDeviceCode)
@@ -153,7 +156,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::TwoFactorSubmitted => {
             let token = std::mem::take(&mut state.two_factor_input);
-            poll_once(state, Some(token))
+            let second_factor = state
+                .two_factor_provider
+                .map(|provider| TwoFactor { provider, token });
+            poll_once(state, second_factor)
         }
         Message::OpenVerificationUri(uri) => Task::perform(
             async move {
@@ -175,6 +181,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::AuthFailed(error) => {
             state.auth_busy = false;
             state.auth_error = Some(error);
+            // A failed poll mid-flow must not leave the waiting screen up:
+            // it offers no restart action, so drop the stale code and show
+            // the start button again. The 2FA screen is exempt because
+            // retrying there is valid and the device code still works.
+            if state.screen != Screen::TwoFa && state.device_code.take().is_some() {
+                state.screen = Screen::Login;
+                state.poll_backoff = 0;
+            }
             Task::none()
         }
         Message::Logout => logout(state),
@@ -202,7 +216,7 @@ fn start_device_code(state: &mut State) -> Task<Message> {
 }
 
 /// Polls the token endpoint once, optionally with a second factor.
-fn poll_once(state: &mut State, two_factor: Option<String>) -> Task<Message> {
+fn poll_once(state: &mut State, second_factor: Option<TwoFactor>) -> Task<Message> {
     let Some(code) = state.device_code.clone() else {
         return Task::none();
     };
@@ -214,7 +228,8 @@ fn poll_once(state: &mut State, two_factor: Option<String>) -> Task<Message> {
     state.auth_busy = true;
     Task::perform(
         async move {
-            auth::poll_device_code(&client, &device, &code.device_code, two_factor.as_deref()).await
+            auth::poll_device_code(&client, &device, &code.device_code, second_factor.as_ref())
+                .await
         },
         |result| match result {
             Ok(outcome) => Message::PollFinished(outcome),
@@ -233,14 +248,17 @@ fn handle_poll(state: &mut State, outcome: PollOutcome) -> Task<Message> {
             Task::perform(wait_for(interval), |()| Message::PollDeviceCode)
         }
         PollOutcome::SlowDown => {
-            // RFC 8628: on slow_down the client must increase its interval
-            // by 5 seconds for all subsequent requests.
-            let interval = poll_interval(state) + 5;
+            // RFC 8628 §3.5: slow_down raises the interval by 5 s for all
+            // subsequent requests, so accumulate instead of bumping once.
+            state.auth_busy = true;
+            state.poll_backoff += 5;
+            let interval = poll_interval(state);
             Task::perform(wait_for(interval), |()| Message::PollDeviceCode)
         }
-        PollOutcome::TwoFactorRequired => {
+        PollOutcome::TwoFactorRequired { providers } => {
             state.auth_busy = false;
             state.auth_error = None;
+            state.two_factor_provider = preferred_provider(&providers);
             state.screen = Screen::TwoFa;
             Task::none()
         }
@@ -287,6 +305,7 @@ fn complete_login(state: &mut State, tokens: AuthTokens) -> Task<Message> {
 fn fail_login(state: &mut State, message: &str) -> Task<Message> {
     state.auth_busy = false;
     state.device_code = None;
+    state.poll_backoff = 0;
     state.auth_error = Some(message.to_owned());
     state.screen = Screen::Login;
     Task::none()
@@ -379,14 +398,16 @@ fn device_info(state: &State) -> DeviceInfo {
     )
 }
 
-/// Polling interval from the current device code, never below one second.
+/// Effective polling interval: the server's base interval plus any
+/// accumulated `slow_down` backoff, never below one second.
 fn poll_interval(state: &State) -> u64 {
-    state
+    let base = state
         .device_code
         .as_ref()
         .map(|code| code.interval)
         .unwrap_or(5)
-        .max(1)
+        .max(1);
+    base + state.poll_backoff
 }
 
 /// Sleeps for the given number of seconds without blocking the UI thread.
@@ -645,15 +666,70 @@ mod tests {
     }
 
     #[test]
-    fn two_factor_required_switches_screen() {
+    fn two_factor_required_switches_screen_and_picks_provider() {
         let mut state = state_at_screen(Screen::DeviceCode);
         state.device_code = Some(sample_device_code());
         let _ = update(
             &mut state,
-            Message::PollFinished(PollOutcome::TwoFactorRequired),
+            Message::PollFinished(PollOutcome::TwoFactorRequired {
+                providers: vec![1, 0],
+            }),
         );
         assert_eq!(state.screen, Screen::TwoFa);
         assert!(!state.auth_busy);
+        // TOTP (0) is preferred even when email (1) is listed first.
+        assert_eq!(state.two_factor_provider, Some(0));
+    }
+
+    #[test]
+    fn auth_failed_mid_flow_returns_to_start() {
+        let mut state = state_at_screen(Screen::DeviceCode);
+        state.device_code = Some(sample_device_code());
+        state.poll_backoff = 5;
+
+        let _ = update(&mut state, Message::AuthFailed("network down".to_owned()));
+
+        assert_eq!(state.screen, Screen::Login);
+        assert!(
+            state.device_code.is_none(),
+            "stale code must not pin the dead waiting screen"
+        );
+        assert_eq!(state.poll_backoff, 0);
+        assert_eq!(state.auth_error.as_deref(), Some("network down"));
+    }
+
+    #[test]
+    fn auth_failed_on_two_factor_keeps_retry_possible() {
+        let mut state = state_at_screen(Screen::TwoFa);
+        state.device_code = Some(sample_device_code());
+
+        let _ = update(&mut state, Message::AuthFailed("timeout".to_owned()));
+
+        assert_eq!(state.screen, Screen::TwoFa);
+        assert!(state.device_code.is_some(), "2FA retry needs the code");
+    }
+
+    #[test]
+    fn slow_down_backoff_is_sticky_until_flow_restart() {
+        let mut state = state_at_screen(Screen::DeviceCode);
+        state.device_code = Some(sample_device_code());
+        assert_eq!(poll_interval(&state), 2);
+
+        let _ = update(&mut state, Message::PollFinished(PollOutcome::SlowDown));
+        assert_eq!(state.poll_backoff, 5);
+        assert_eq!(poll_interval(&state), 7);
+
+        // RFC 8628: the increase applies to every subsequent request.
+        let _ = update(&mut state, Message::PollFinished(PollOutcome::SlowDown));
+        assert_eq!(poll_interval(&state), 12);
+
+        // A fresh code or an ended flow resets the accumulated backoff.
+        let _ = update(
+            &mut state,
+            Message::DeviceCodeReceived(sample_device_code()),
+        );
+        assert_eq!(state.poll_backoff, 0);
+        assert_eq!(poll_interval(&state), 2);
     }
 
     #[test]

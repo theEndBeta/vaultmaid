@@ -149,6 +149,7 @@ Precondition: Cache ready; no vault model.
 - 8a. Plan: `models/*` define `VaultData { folders, collections, items, orgs }` with `serde` and `Folder {id,name}` etc.; preamble per file states invariant (e.g. folder names slash-delimited).
 - 8b. Plan: `api/sync.rs` calls SDK `sync` with bearer token + server_url, decrypts, maps to `models`; emits `VaultSynced`; errors to `VaultSyncError` with 429/403 mapping.
 - 8c. Plan: On `VaultSynced`, serialize vault JSON, encrypt with PIN key, upsert to SQLite; update `Last synced` timestamp in State.
+- 8d. Plan (review triage): run keyring and cache I/O inside `Task::perform` like the HTTP steps (findings 6/8/18): warn when `complete_login` cannot extract `user_id`, log `HOSTNAME`/device-identifier fallbacks, and treat `InvalidSnapshot` in `load_vault` like a decrypt failure (delete row + `None`).
 - Validation: `wiremock` sync test; manual sync with real account decrypts and persists; `cargo check` green.
 - Commit: `feat(sync): sync and decrypt vault into domain model with cache persist`
 
@@ -166,6 +167,7 @@ Precondition: MainView renders decrypted vault.
 - 10a. Plan: `app.rs` idle subscription tracking last `Message` timestamp; emit `VaultLocked` after 15 min; preamble explains why idle is subscription not polling.
 - 10b. Plan: On `VaultLocked` or `LockRequested`, drop `VaultState` from memory (zeroize via `Option::take`), navigate to `Screen::Unlock`; manual Lock button in toolbar/menu.
 - 10c. Plan: `ui/unlock.rs` PIN entry decrypts cache via `cache::load_vault`; on success re-hydrates in-memory VaultState and re-syncs; failed PIN shows error, no token exposure.
+- 10d. Plan (review triage): harden session lifecycle — key logout cleanup off `session.user_id` when `last_user_id` is missing and reset `pin_error`/PIN fields in `logout` (finding 7); add a flow-generation guard so a stale boot-time `silent_refresh` result cannot overwrite a fresh login (finding 13).
 - Validation: idle reducer test; manual idle -> lock wipes vault (verify via debug log, not retained in undo).
 - Commit: `feat(lock): add idle auto-lock and PIN unlock wiping decrypted vault`
 
@@ -246,15 +248,44 @@ Precondition: Core flows work via buttons/menus; drag-drop is minimal.
 #### Step 19 — Comprehensive tests
 Precondition: All features implemented; test coverage partial.
 - 19a. Plan: Unit tests added/expanded: `cache/encryption` round-trip + corrupt handling, `pin` hash/verify/derive, `config` ser/de + corrupt backup, slash-split tree (including `a`+`a/b` coexistence), `state` reducers (optimistic/revert/undo/idle wipe/bulk partial-failure).
-- 19b. Plan: `wiremock` integration: device-code + refresh + 2FA, folder/collection CRUD, share, 429/403, offline fallback.
-- 19c. Plan: `cargo clippy -- -D warnings` and `cargo fmt --check` clean; literate-preamble linter (manual review checklist: every `src/**/*.rs` opens with doc comment, docs explain WHY).
+- 19b. Plan: `wiremock` integration: device-code + refresh + 2FA, folder/collection CRUD, share, 429/403, offline fallback. Assert request shapes (grant_type, device_code, client_id, scope, deviceIdentifier) in the start/poll tests; add hermetic keyring (mock credential builder) so logout reducers stop touching the real Secret Service; tests for slow_down schedule, boot restore, `now_epoch_secs`, and a file-backed WAL storage test.
+- 19c. Plan: `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean (fix `field_reassign_with_default` in `logout_clears_session_material` first); literate-preamble linter (manual review checklist: every `src/**/*.rs` opens with doc comment, docs explain WHY); polish items — move `error_text` below its callers, reasoning docs for keyring token helpers, drop or justify the `STANDARD_NO_PAD` fallback in `user_id_from_token` and the unused `DeviceCode` `Serialize` derive.
 - Validation: `cargo test` all green; `cargo clippy` + `cargo fmt` pass.
 - Commit: `test: add unit and wiremock coverage plus lint checks`
 
 ## Risks / Gotchas
 - `bitwarden` SDK may lack share endpoints -> verify in Step 15 early; raw REST bearer fallback.
-- Device-code 2FA shapes differ Cloud vs Vaultwarden -> test both in Step 6. The device-authorization endpoint path is a guess pinned as a constant in `api/auth.rs`; verify against a live server at first manual run and adjust there only..
+- Device-code 2FA shapes differ Cloud vs Vaultwarden -> test both in Step 6. The device-authorization endpoint path is a guess pinned as a constant in `api/auth.rs`; verify against a live server at first manual run and adjust there only.
+- **2FA request fields (review finding 4, fixed in code)**: the second factor is sent as Bitwarden extension fields `twoFactorToken` + `twoFactorProvider` (camelCase, matching official clients), not OAuth-style snake_case; the provider id is selected from the server's `TwoFactorProviders` payload. Still needs live-server confirmation at first manual run.
 - Iced drag-drop remains manual even on 0.14 -> buttons/menus are canonical; drag is enhancement (Step 18).
+
+## Review Findings Triage (2026-09-19, from `TODO_e6b8e5a-8a155b7.md`)
+
+| # | Sev | Disposition |
+|---|-----|-------------|
+| 1 | major | **Fixed** — `AuthFailed` clears `device_code` and returns to Login (2FA screen exempt) so the restart button re-renders |
+| 2 | major | **Fixed** — `slow_down` backoff now accumulates in `State.poll_backoff` per RFC 8628 §3.5, reset on new code / flow end |
+| 3 | major | **Fixed** — `State` has a hand-written masked `Debug`; `DeviceCode`'s `Debug` masks `device_code` (finding 15 folded in) |
+| 4 | major | **Fixed** — `twoFactorToken` + `twoFactorProvider` sent; providers parsed from `TwoFactorProviders` (array or object) and preferred (0 → 1 → first). Live-server verification still required |
+| 5 | minor | **Resolved** — AGENTS.md state machine corrected: logout wipes keyring/cache/session, PIN verifier retained |
+| 6 | minor | Step 8 — log a warning in `complete_login` when `user_id` extraction fails |
+| 7 | minor | Step 10 — key logout cleanup off `session.user_id` fallback; reset `pin_error` and PIN fields in `logout` |
+| 8 | minor | Step 8 — move keyring and cache I/O into `Task::perform` like the HTTP steps |
+| 9 | minor | Step 19 — assert request shapes (grant_type, device_code, client_id, scope, deviceIdentifier) in start/poll wiremock tests |
+| 10 | minor | **Fixed** — obsolete `Screen` allow removed; `Message` allow comment tightened to `Logout` |
+| 11 | minor | Step 8 — treat `InvalidSnapshot` like decrypt failure (delete row + `None`) |
+| 12 | minor | Step 19 — hermetic keyring via mock credential builder for logout reducers |
+| 13 | minor | Step 10 — flow-generation guard so stale boot-refresh results cannot overwrite a fresh login |
+| 14 | minor | Step 19 — tests for backoff schedule, boot restore, `now_epoch_secs`, file-backed WAL |
+| 15 | minor | **Fixed** (with 3) — `DeviceCode` masks `device_code` in `Debug` |
+| 16 | minor | Step 19 — fix `field_reassign_with_default` in test, adopt `cargo clippy --all-targets -- -D warnings` |
+| 17 | nit | No action — noted; keep commit Validation counts accurate going forward |
+| 18 | nit | Step 8 — log when `HOSTNAME` is unset / device identifier missing |
+| 19 | nit | Step 19 — literate polish: move `error_text` below callers; reasoning docs for keyring token helpers |
+| 20 | nit | Step 19 — drop or justify the `STANDARD_NO_PAD` fallback in `user_id_from_token` |
+| 21 | nit | Step 19 — drop unused `DeviceCode` `Serialize` derive or justify for sync payloads; consider read-only `CacheKey` accessors |
+| 22 | nit | **Fixed** — typo in plan correction line |
+
 - Cache key: Argon2 with per-user salt + PIN-derived; never raw token; Step 4/7 must stay aligned.
 - Slash-split `a` and `a/b` both real folders -> tree node is leaf+parent; covered in Step 9/19 tests.
 - Org share changes item IDs -> always re-sync after Step 15; don't patch IDs locally.

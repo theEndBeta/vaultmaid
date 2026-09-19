@@ -7,15 +7,18 @@
 // unwrap layers before rendering. Flat fields with an explicit Screen
 // discriminator make the active flow obvious and keep matches shallow.
 //
-// The authenticated session lives here as an `Option<Session>` whose Debug
-// is masked, so deriving Debug on State cannot leak tokens into logs. The
-// PIN form fields are cleared as soon as they are consumed; the same
-// discipline applies when auth material is dropped on logout.
+// Debug is hand-written, not derived, because several fields are secrets in
+// transit: the PIN as typed, the confirm field, the live 2FA code, and the
+// decrypted vault snapshot. A derived Debug would print all of them into any
+// tracing line that touches State; the masked impl keeps only non-secret
+// fields and placeholders for the rest. Auth token types already mask
+// themselves the same way.
 
 use crate::api::auth::{DeviceCode, Session};
 use crate::config::Config;
 use crate::message::Screen;
 use crate::pin::CacheKey;
+use std::fmt;
 
 /// The entire runtime state of the application.
 ///
@@ -24,7 +27,7 @@ use crate::pin::CacheKey;
 /// loaded once at startup and mutated in place so views never talk to the
 /// filesystem. `toasts` is a placeholder that later steps replace with a
 /// structured toast stack.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct State {
     pub screen: Screen,
     pub config: Config,
@@ -43,6 +46,11 @@ pub struct State {
     pub device_code: Option<DeviceCode>,
     /// Live 2FA code entry.
     pub two_factor_input: String,
+    /// Provider id chosen from the server's `TwoFactorProviders` payload.
+    pub two_factor_provider: Option<u8>,
+    /// Extra seconds added to every remaining poll after `slow_down`
+    /// (RFC 8628 §3.5); reset when a new device code or flow starts.
+    pub poll_backoff: u64,
     /// A network auth step is in flight; views show a spinner.
     pub auth_busy: bool,
     /// User-facing authentication error.
@@ -52,6 +60,34 @@ pub struct State {
     pub cache_key: Option<CacheKey>,
     /// Decrypted snapshot loaded from the cache, if one was readable.
     pub cached_vault: Option<String>,
+}
+
+impl fmt::Debug for State {
+    /// Sensitive fields are placeholders, never values: the typed PIN, its
+    /// confirm, the 2FA code, and the decrypted vault would otherwise be
+    /// one stray log statement away from the terminal.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("State")
+            .field("screen", &self.screen)
+            .field("config", &self.config)
+            .field("toasts", &self.toasts)
+            .field("pin_input", &"***")
+            .field("pin_confirm", &"***")
+            .field("pin_error", &self.pin_error)
+            .field("session", &self.session)
+            .field("device_code", &self.device_code)
+            .field("two_factor_input", &"***")
+            .field("two_factor_provider", &self.two_factor_provider)
+            .field("poll_backoff", &self.poll_backoff)
+            .field("auth_busy", &self.auth_busy)
+            .field("auth_error", &self.auth_error)
+            .field("cache_key", &self.cache_key)
+            .field(
+                "cached_vault",
+                &self.cached_vault.as_ref().map(|json| json.len()),
+            )
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -66,5 +102,26 @@ mod tests {
         assert!(state.session.is_none());
         assert!(!state.auth_busy);
         assert_eq!(state.config, crate::config::Config::default());
+    }
+
+    #[test]
+    fn debug_never_prints_pin_totp_or_decrypted_vault() {
+        // Initializer syntax, not field reassignment: keeps the test clean
+        // under `clippy --all-targets` once Step 19 adopts it.
+        let state = State {
+            pin_input: "1234".to_owned(),
+            pin_confirm: "1234".to_owned(),
+            two_factor_input: "654321".to_owned(),
+            cached_vault: Some(r#"{"items":[{"login":"s3cret"}]}"#.to_owned()),
+            ..State::default()
+        };
+
+        let printed = format!("{state:?}");
+        assert!(!printed.contains("1234"));
+        assert!(!printed.contains("654321"));
+        assert!(!printed.contains("s3cret"));
+        // Length, not content, is the only thing Debug reveals about the
+        // snapshot — enough to debug the cache without leaking it.
+        assert!(printed.contains("cached_vault: Some("));
     }
 }

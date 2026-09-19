@@ -13,7 +13,6 @@ use crate::api::auth::{AuthTokens, DeviceCode, PollOutcome};
 use crate::pin::Pin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)] // later steps construct every variant as the state machine grows
 pub enum Screen {
     #[default]
     Login,
@@ -25,7 +24,7 @@ pub enum Screen {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Logout/Noop are emitted by views landing in later steps
+#[allow(dead_code)] // Logout awaits a view; Noop is emitted from app.rs
 pub enum Message {
     Noop,
     /// The login field changed. Persisted immediately so a crash after

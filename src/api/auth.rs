@@ -74,13 +74,28 @@ impl DeviceInfo {
 }
 
 /// Short code the user approves in a browser, plus the polling handle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceCode {
     pub device_code: String,
     pub user_code: String,
     pub verification_uri: String,
     #[serde(default = "default_interval")]
     pub interval: u64,
+}
+
+impl fmt::Debug for DeviceCode {
+    /// `device_code` is itself a credential — whoever holds it can claim
+    /// the tokens once the user approves — so it is masked like the
+    /// token types. `user_code` is what we tell the user to type, and is
+    /// safe to show.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceCode")
+            .field("device_code", &"***")
+            .field("user_code", &self.user_code)
+            .field("verification_uri", &self.verification_uri)
+            .field("interval", &self.interval)
+            .finish()
+    }
 }
 
 fn default_interval() -> u64 {
@@ -142,12 +157,73 @@ pub enum PollOutcome {
     Pending,
     /// Server asked for slower polling; back off before retrying.
     SlowDown,
-    /// Server requires a second factor; resubmit with a `two_factor_token`.
-    TwoFactorRequired,
+    /// Server requires a second factor; carries the provider ids the
+    /// account accepts so the app can pick one it can drive.
+    TwoFactorRequired { providers: Vec<u8> },
     /// Device code expired; the whole flow must restart.
     Expired,
     /// User declined the request.
     Denied,
+}
+
+/// A second factor being resubmitted with a poll.
+///
+/// Bitwarden's token endpoint expects these as camelCase extension
+/// fields (`twoFactorToken`, `twoFactorProvider`) — the same casing its
+/// official clients send — rather than the snake_case of the OAuth
+/// core parameters, because they ride on the ASP.NET form binding of
+/// Bitwarden's identity server.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TwoFactor {
+    pub provider: u8,
+    pub token: String,
+}
+
+impl fmt::Debug for TwoFactor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TwoFactor")
+            .field("provider", &self.provider)
+            .field("token", &"***")
+            .finish()
+    }
+}
+
+/// Bitwarden two-factor provider ids the app can complete in-app.
+///
+/// 0 is the authenticator (TOTP) app and 1 is email; everything else
+/// (Duo, WebAuthn, YubiKey) needs a browser round trip, which the
+/// device flow already provides by opening the verification URI.
+const TWO_FACTOR_AUTHENTICATOR: u8 = 0;
+const TWO_FACTOR_EMAIL: u8 = 1;
+
+/// Pick the second factor the app can drive without a browser.
+///
+/// Prefers TOTP, then email; falls back to the first advertised provider
+/// so the code entry still appears rather than silently hanging.
+pub fn preferred_provider(providers: &[u8]) -> Option<u8> {
+    [TWO_FACTOR_AUTHENTICATOR, TWO_FACTOR_EMAIL]
+        .into_iter()
+        .find(|preferred| providers.contains(preferred))
+        .or_else(|| providers.first().copied())
+}
+
+/// Extract provider ids from the `TwoFactorProviders` payload.
+///
+/// Bitwarden sends an array of ids alongside a `TwoFactorProviders2`
+/// object keyed by id; Vaultwarden has shipped either shape, so both
+/// are accepted and anything unparseable yields an empty list.
+fn parse_providers(value: &serde_json::Value) -> Vec<u8> {
+    match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_u64().map(|id| id as u8))
+            .collect(),
+        serde_json::Value::Object(map) => map
+            .keys()
+            .filter_map(|key| key.parse::<u8>().ok())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Failures from the authentication flow.
@@ -202,13 +278,13 @@ pub async fn start_device_code(
 /// Poll the token endpoint once.
 ///
 /// The caller owns the loop and the delay; this returns a single
-/// outcome so scheduling stays testable and observable. `two_factor_token`
+/// outcome so scheduling stays testable and observable. `second_factor`
 /// is `Some` only when retrying after `TwoFactorRequired`.
 pub async fn poll_device_code(
     client: &Client,
     device: &DeviceInfo,
     device_code: &str,
-    two_factor_token: Option<&str>,
+    second_factor: Option<&TwoFactor>,
 ) -> Result<PollOutcome, AuthError> {
     let url = client.url(TOKEN_PATH, ApiPrefix::Identity)?;
     let mut form = vec![
@@ -219,8 +295,9 @@ pub async fn poll_device_code(
         ("deviceIdentifier", device.device_identifier.clone()),
         ("deviceName", device.device_name.clone()),
     ];
-    if let Some(token) = two_factor_token {
-        form.push(("two_factor_token", token.to_owned()));
+    if let Some(factor) = second_factor {
+        form.push(("twoFactorProvider", factor.provider.to_string()));
+        form.push(("twoFactorToken", factor.token.clone()));
     }
 
     let response = client.http().post(url).form(&form).send().await?;
@@ -245,7 +322,13 @@ pub async fn poll_device_code(
         Some("access_denied") => PollOutcome::Denied,
         // Bitwarden signals a second factor with a provider payload
         // rather than an OAuth error string.
-        _ if error.two_factor_providers.is_some() => PollOutcome::TwoFactorRequired,
+        _ if error.two_factor_providers.is_some() => PollOutcome::TwoFactorRequired {
+            providers: error
+                .two_factor_providers
+                .as_ref()
+                .map(parse_providers)
+                .unwrap_or_default(),
+        },
         // The body is already consumed here, so the API status mapping is
         // the only extra context left to attach.
         _ => {
@@ -510,7 +593,7 @@ mod tests {
             .and(path("/identity/connect/token"))
             .respond_with(ResponseTemplate::new(400).set_body_json(json!({
                 "error": "invalid_grant",
-                "TwoFactorProviders": [0]
+                "TwoFactorProviders": [0, 1]
             })))
             .mount(&server)
             .await;
@@ -518,7 +601,33 @@ mod tests {
         let outcome = poll_device_code(&client_for(&server), &device(), "dev-abc", None)
             .await
             .expect("poll");
-        assert_eq!(outcome, PollOutcome::TwoFactorRequired);
+        assert_eq!(
+            outcome,
+            PollOutcome::TwoFactorRequired {
+                providers: vec![0, 1]
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_parses_object_shaped_provider_payload() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/identity/connect/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": "invalid_grant",
+                "TwoFactorProviders": { "1": null }
+            })))
+            .mount(&server)
+            .await;
+
+        let outcome = poll_device_code(&client_for(&server), &device(), "dev-abc", None)
+            .await
+            .expect("poll");
+        assert_eq!(
+            outcome,
+            PollOutcome::TwoFactorRequired { providers: vec![1] }
+        );
     }
 
     #[tokio::test]
@@ -527,7 +636,10 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/identity/connect/token"))
             .and(wiremock::matchers::body_string_contains(
-                "two_factor_token=123456",
+                "twoFactorToken=123456",
+            ))
+            .and(wiremock::matchers::body_string_contains(
+                "twoFactorProvider=0",
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "access_token": "access-2",
@@ -536,7 +648,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let outcome = poll_device_code(&client_for(&server), &device(), "dev-abc", Some("123456"))
+        let factor = TwoFactor {
+            provider: TWO_FACTOR_AUTHENTICATOR,
+            token: "123456".to_owned(),
+        };
+        let outcome = poll_device_code(&client_for(&server), &device(), "dev-abc", Some(&factor))
             .await
             .expect("poll");
         assert!(matches!(outcome, PollOutcome::Authorized(_)));
@@ -604,5 +720,39 @@ mod tests {
         let printed = format!("{tokens:?}");
         assert!(!printed.contains("super-secret"));
         assert!(!printed.contains("also-secret"));
+    }
+
+    #[test]
+    fn device_code_debug_masks_device_code() {
+        let code = DeviceCode {
+            device_code: "exchangeable-credential".to_owned(),
+            user_code: "ABCD-EFGH".to_owned(),
+            verification_uri: "https://vault.example/device".to_owned(),
+            interval: 5,
+        };
+        let printed = format!("{code:?}");
+        assert!(!printed.contains("exchangeable-credential"));
+        assert!(
+            printed.contains("ABCD-EFGH"),
+            "user-facing code stays visible"
+        );
+    }
+
+    #[test]
+    fn two_factor_debug_masks_token() {
+        let factor = TwoFactor {
+            provider: 0,
+            token: "654321".to_owned(),
+        };
+        let printed = format!("{factor:?}");
+        assert!(!printed.contains("654321"));
+    }
+
+    #[test]
+    fn preferred_provider_favors_totp_then_email() {
+        assert_eq!(preferred_provider(&[1, 0]), Some(TWO_FACTOR_AUTHENTICATOR));
+        assert_eq!(preferred_provider(&[1, 7]), Some(TWO_FACTOR_EMAIL));
+        assert_eq!(preferred_provider(&[7, 2]), Some(7), "fallback to first");
+        assert_eq!(preferred_provider(&[]), None);
     }
 }
